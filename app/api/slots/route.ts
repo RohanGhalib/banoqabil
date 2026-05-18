@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, initDb, seedDefaultSlots } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 // GET: all slots enriched with live roster counts via a single SQL JOIN
 export async function GET() {
   await initDb();

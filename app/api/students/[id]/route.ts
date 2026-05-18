@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, initDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 // PUT: Update a student (enroll, unenroll, edit fields)
 export async function PUT(
   req: NextRequest,

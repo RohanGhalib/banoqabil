@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, initDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 // GET: paginated, filtered, searchable student list
 export async function GET(req: NextRequest) {
   await initDb();
