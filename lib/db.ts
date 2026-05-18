@@ -1,4 +1,18 @@
 import { createClient } from '@libsql/client';
+import fs from 'fs';
+import path from 'path';
+
+// Ensure the local data directory exists to prevent SQLITE_CANTOPEN (14) errors during module evaluation
+if (!process.env.TURSO_DATABASE_URL) {
+  const dataDir = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(dataDir)) {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+    } catch (err) {
+      console.warn('Could not create data directory programmatically:', err);
+    }
+  }
+}
 
 // ─── Connection ────────────────────────────────────────────────────────────────
 // Local dev  : TURSO_DATABASE_URL=file:./data/banoqabil.db  (no auth token)
@@ -7,6 +21,7 @@ const url = process.env.TURSO_DATABASE_URL ?? 'file:./data/banoqabil.db';
 const authToken = process.env.TURSO_AUTH_TOKEN;
 
 export const db = createClient({ url, authToken });
+
 
 // ─── Schema Migration (runs on first import) ───────────────────────────────────
 // This is idempotent — safe to call on every cold start.
