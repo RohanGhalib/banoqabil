@@ -71,9 +71,9 @@ async function main() {
 
   for (let i = 0; i < students.length; i += BATCH) {
     const chunk = students.slice(i, i + BATCH);
-    for (const s of chunk) {
+    const statements = chunk.map(s => {
       const sid = String(s.id).trim();
-      const res = await db.execute({
+      return {
         sql: `INSERT OR IGNORE INTO students (id, name, gender, interviewed, deposit, batch1, priority, status, enrolled)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         args: [
@@ -86,8 +86,16 @@ async function main() {
           Number(s.priority) || 4,
           s.status || '',
         ],
+      };
+    });
+
+    try {
+      const results = await db.batch(statements, 'write');
+      results.forEach(res => {
+        if (res.rowsAffected > 0) added++; else skipped++;
       });
-      if (res.rowsAffected > 0) added++; else skipped++;
+    } catch (err) {
+      console.error(`\n❌ Batch insertion failed for chunk starting at index ${i}:`, err);
     }
     process.stdout.write(`\r  Inserted ${Math.min(i + BATCH, students.length)} / ${students.length}...`);
   }
