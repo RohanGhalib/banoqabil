@@ -35,6 +35,8 @@ export default function App() {
   const [uploadAlert, setUploadAlert] = useState<{type:'ok'|'warn',msg:string}|null>(null);
   const [stats, setStats] = useState({total:0,enrolled:0,p1:0,p2:0,remaining:0});
   const [enrolledStudents, setEnrolledStudents] = useState<Student[]>([]);
+  const [enrollStudent, setEnrollStudent] = useState<Student | null>(null);
+  const [timetableSlots, setTimetableSlots] = useState<any[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>|null>(null);
   const PAGE_SIZE = 50;
 
@@ -63,7 +65,17 @@ export default function App() {
     if(d.success) setEnrolledStudents(d.students);
   }, []);
 
-  useEffect(()=>{ fetchStudents(); fetchStats(); },[]);
+  const fetchTimetableSlots = useCallback(async () => {
+    try {
+      const r = await fetch('/api/slots');
+      const d = await r.json();
+      if (d.success) setTimetableSlots(d.slots);
+    } catch (err) {
+      console.error('Error fetching slots:', err);
+    }
+  }, []);
+
+  useEffect(()=>{ fetchStudents(); fetchStats(); fetchTimetableSlots(); },[]);
   useEffect(()=>{ if(tab==='enrolled') fetchEnrolled(); },[tab]);
 
   const onSearch = (v:string) => {
@@ -75,9 +87,63 @@ export default function App() {
   const setFilterAndFetch = (f:string) => { setFilter(f);setPage(1);fetchStudents(search,f,1); };
   const goPage = (p:number) => { setPage(p);fetchStudents(search,filter,p); };
 
-  const toggleEnroll = async (s:Student) => {
-    await fetch(`/api/students/${s.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enrolled:!s.enrolled})});
-    fetchStudents();fetchStats();
+  const executeEnrollment = async (slot: any) => {
+    if (!enrollStudent) return;
+    const enrolledCount = slot.enrolledCount || 0;
+    if (enrolledCount >= slot.capacity) {
+      if (!confirm(`Warning: This class is already full (${enrolledCount}/${slot.capacity} seats). Do you want to override and enroll anyway?`)) {
+        return;
+      }
+    }
+    try {
+      const res = await fetch(`/api/students/${enrollStudent.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enrolled: true,
+          campusId: slot.campusId,
+          roomId: slot.roomId,
+          slotKey: slot.slotKey,
+          courseCode: slot.course
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEnrollStudent(null);
+        fetchStudents();
+        fetchStats();
+        fetchTimetableSlots();
+        if (tab === 'enrolled') fetchEnrolled();
+      } else {
+        alert(`Failed to enroll student: ${data.error}`);
+      }
+    } catch (err) {
+      alert('An error occurred during enrollment.');
+    }
+  };
+
+  const undoEnrollment = async (studentId: string) => {
+    if (!confirm('Are you sure you want to un-enroll this student from their timetable slot?')) return;
+    try {
+      const res = await fetch(`/api/students/${studentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enrolled: false
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchStudents();
+        fetchStats();
+        fetchTimetableSlots();
+        if (tab === 'enrolled') fetchEnrolled();
+      } else {
+        alert(`Failed to un-enroll: ${data.error}`);
+      }
+    } catch (err) {
+      alert('An error occurred during un-enrollment.');
+    }
   };
 
   const addManual = async () => {
@@ -218,9 +284,24 @@ export default function App() {
                       <td><span className={`p-badge ${PBADGE[s.priority]}`}>{PNAMES[s.priority]}</span></td>
                       <td style={{fontSize:'12px',color:'var(--text2)'}}>{s.status}</td>
                       <td>
-                        <button className={`enroll-btn${s.enrolled?' enrolled':''}`} onClick={()=>toggleEnroll(s)}>
-                          {s.enrolled?'✓ Enrolled':'Enroll'}
-                        </button>
+                        {s.enrolled ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button 
+                              className="enroll-btn enrolled" 
+                              onClick={() => undoEnrollment(s.id)}
+                              title="Click to un-enroll"
+                            >
+                              ✓ Enrolled
+                            </button>
+                            <span style={{ fontSize: '11px', color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
+                              {s.campusId?.toUpperCase()} · {s.roomId?.split('-')[1]?.toUpperCase()} · {s.courseCode}
+                            </span>
+                          </div>
+                        ) : (
+                          <button className="enroll-btn" onClick={() => setEnrollStudent(s)}>
+                            Enroll in Class
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -252,8 +333,8 @@ export default function App() {
                   {g.data.length===0?<div style={{padding:'1rem',color:'var(--text3)',fontSize:'13px'}}>None enrolled yet.</div>:
                     g.data.map(s=>(
                       <div className="enr-item" key={s.id}>
-                        <div><div className="enr-name">{s.name}</div><div className="enr-meta">{s.id} · {PNAMES[s.priority]} · {s.courseCode||'—'}</div></div>
-                        <button className="enroll-btn enrolled" style={{fontSize:'11px'}} onClick={()=>toggleEnroll(s)}>Unenroll</button>
+                        <div><div className="enr-name">{s.name}</div><div className="enr-meta">{s.id} · {PNAMES[s.priority]} · {s.campusId?.toUpperCase()} · {s.roomId?.split('-')[1]?.toUpperCase()} · {s.courseCode}</div></div>
+                        <button className="enroll-btn enrolled" style={{fontSize:'11px'}} onClick={() => undoEnrollment(s.id)}>Unenroll</button>
                       </div>
                     ))
                   }
@@ -275,8 +356,8 @@ export default function App() {
                         <td style={{fontWeight:500}}>{s.name}</td>
                         <td><span className={`g-badge ${s.gender==='Male'?'g-m':'g-f'}`}>{s.gender}</span></td>
                         <td><span className={`p-badge ${PBADGE[s.priority]}`}>{PNAMES[s.priority]}</span></td>
-                        <td style={{fontSize:'12px',color:'var(--text2)'}}>{s.status}</td>
-                        <td><button className="enroll-btn enrolled" onClick={()=>toggleEnroll(s)}>Unenroll</button></td>
+                        <td style={{fontSize:'12px',color:'var(--text2)'}}>{s.campusId?.toUpperCase()} · {s.roomId?.split('-')[1]?.toUpperCase()} · {s.courseCode}</td>
+                        <td><button className="enroll-btn enrolled" onClick={() => undoEnrollment(s.id)}>Unenroll</button></td>
                       </tr>
                     ))
                   }
@@ -352,6 +433,97 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* SLOT ALLOCATOR DRAWER */}
+      <div className={`drawer-overlay${enrollStudent ? ' open' : ''}`} onClick={e=>{if(e.target===e.currentTarget)setEnrollStudent(null);}}>
+        <div className="drawer-panel">
+          <div className="drawer-header">
+            <div>
+              <div className="modal-title">🏫 Slot Allocator</div>
+              <div className="modal-sub" style={{marginBottom:0}}>Select a class schedule for {enrollStudent?.name}</div>
+            </div>
+            <button className="modal-close" onClick={()=>setEnrollStudent(null)}>✕</button>
+          </div>
+          <div className="drawer-body">
+            {enrollStudent && (
+              <div className="alert alert-info">
+                <div style={{fontWeight:600,marginBottom:4}}>Candidate Details:</div>
+                <div>📌 ID: {enrollStudent.id}</div>
+                <div>👤 Gender: {enrollStudent.gender}</div>
+                <div>⚡ Priority: {PNAMES[enrollStudent.priority]}</div>
+              </div>
+            )}
+            
+            {['ds', 'ic'].map(campusKey => {
+              const campusName = campusKey === 'ds' ? 'Darussalam Campus' : 'Islamic Center';
+              const campusSlots = timetableSlots.filter(s => s.campusId === campusKey);
+              
+              return (
+                <div key={campusKey}>
+                  <div className="drawer-section-title">{campusName}</div>
+                  {campusSlots.length === 0 ? (
+                    <div style={{fontSize:'12px',color:'var(--text3)',padding:'4px 0'}}>No slots configured.</div>
+                  ) : (
+                    <div className="drawer-slots-list">
+                      {campusSlots.map(slot => {
+                        const filledPct = slot.capacity ? Math.round((slot.enrolledCount / slot.capacity) * 100) : 0;
+                        const reqGender = enrollStudent?.gender === 'Female' ? 'F' : 'M';
+                        const isGenderMatch = slot.gender === 'M+F' || slot.gender === reqGender;
+                        
+                        return (
+                          <div 
+                            key={slot.id} 
+                            className="drawer-slot-card"
+                            style={{
+                              opacity: isGenderMatch ? 1 : 0.5,
+                              borderColor: isGenderMatch ? 'var(--border2)' : 'var(--border)'
+                            }}
+                            onClick={() => {
+                              if (!isGenderMatch) {
+                                if (!confirm(`Warning: This slot is designated for ${slot.gender} students, but the candidate is ${enrollStudent?.gender}. Enroll anyway?`)) {
+                                  return;
+                                }
+                              }
+                              executeEnrollment(slot);
+                            }}
+                          >
+                            <div className="drawer-slot-header">
+                              <div>
+                                <div className="drawer-slot-title" style={{color: isGenderMatch ? 'var(--text)' : 'var(--text3)'}}>
+                                  {slot.roomId.split('-')[1].toUpperCase()} · {slot.course}
+                                </div>
+                                <div className="drawer-slot-meta">
+                                  Slot: {slot.slotKey.split('-').join(', ')} · Capacity: {slot.capacity} · Gender: {slot.gender}
+                                </div>
+                              </div>
+                              <span className={`g-badge ${slot.gender === 'M' ? 'g-m' : slot.gender === 'F' ? 'g-f' : ''}`} style={{background: slot.gender==='M+F'?'#EAF3DE':undefined, color: slot.gender==='M+F'?'#27500A':undefined}}>
+                                {slot.gender}
+                              </span>
+                            </div>
+                            <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:'var(--text2)',marginTop:2}}>
+                              <span>Seats Filled</span>
+                              <strong>{slot.enrolledCount} / {slot.capacity} ({filledPct}%)</strong>
+                            </div>
+                            <div className="drawer-slot-bar-wrap">
+                              <div 
+                                className="drawer-slot-bar-fill" 
+                                style={{
+                                  width: `${Math.min(100, filledPct)}%`,
+                                  background: filledPct >= 100 ? 'var(--red)' : filledPct >= 85 ? 'var(--p3)' : 'var(--green)'
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </>
   );
 }

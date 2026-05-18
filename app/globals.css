@@ -198,6 +198,112 @@ tbody td{padding:10px 14px;font-size:13px;vertical-align:middle}
 .btn-clear-slot{background:white;color:#E24B4A;border-color:#F09595}
 .btn-cancel-slot{background:white;color:var(--text2);border-color:var(--border2)}
 
+/* ── Sliding Drawer & Slot Allocator ── */
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 300;
+  display: flex;
+  justify-content: flex-end;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.drawer-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.drawer-panel {
+  background: var(--surface);
+  width: 100%;
+  max-width: 480px;
+  height: 100%;
+  transform: translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.15);
+}
+.drawer-overlay.open .drawer-panel {
+  transform: translateX(0);
+}
+.drawer-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.drawer-body {
+  padding: 24px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.alert-info {
+  background: #EBF5FB;
+  border: 1px solid #AED6F1;
+  color: #1B4F72;
+}
+.drawer-section-title {
+  font-size: 11px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  margin-top: 8px;
+}
+.drawer-slots-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.drawer-slot-card {
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.drawer-slot-card:hover {
+  background: var(--bg);
+  border-color: var(--text3);
+}
+.drawer-slot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.drawer-slot-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.drawer-slot-meta {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: 'DM Mono', monospace;
+}
+.drawer-slot-bar-wrap {
+  width: 100%;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.drawer-slot-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
 @media print{
   header .hdr-btns,.campus-tabs,.legend-row,.slot-modal-bg{display:none!important}
   header{position:relative;border-bottom:2px solid #1a1a18}
@@ -208,3 +314,4 @@ tbody td{padding:10px 14px;font-size:13px;vertical-align:middle}
   .slot-inner.empty{display:none!important}
   .slot-cell{cursor:default}
 }
+
