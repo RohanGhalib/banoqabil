@@ -1,88 +1,70 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase-admin';
+import { db, initDb } from '@/lib/db';
 
-// PUT: Update student data (including enrolling/assigning slots)
+// PUT: Update a student (enroll, unenroll, edit fields)
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await initDb();
   try {
     const { id } = await params;
     const body = await req.json();
 
-    const docRef = db.collection('students').doc(id);
-    const docSnap = await docRef.get();
-
-    if (!docSnap.exists) {
+    // Check student exists
+    const existing = await db.execute({ sql: 'SELECT id FROM students WHERE id = ?', args: [id] });
+    if (existing.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Student not found.' }, { status: 404 });
     }
 
-    const currentData = docSnap.data();
+    // Build dynamic SET clause
+    const sets: string[] = [];
+    const args: any[]   = [];
 
-    // Prepare fields to update
-    const updateData: Record<string, any> = {};
+    if (body.name       !== undefined) { sets.push('name = ?');        args.push(body.name); }
+    if (body.gender     !== undefined) { sets.push('gender = ?');      args.push(body.gender); }
+    if (body.priority   !== undefined) { sets.push('priority = ?');    args.push(Number(body.priority)); }
+    if (body.interviewed !== undefined){ sets.push('interviewed = ?'); args.push(body.interviewed); }
+    if (body.deposit    !== undefined) { sets.push('deposit = ?');     args.push(body.deposit); }
+    if (body.status     !== undefined) { sets.push('status = ?');      args.push(body.status); }
 
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.gender !== undefined) updateData.gender = body.gender;
-    if (body.priority !== undefined) updateData.priority = Number(body.priority);
-    if (body.interviewed !== undefined) updateData.interviewed = body.interviewed;
-    if (body.deposit !== undefined) updateData.deposit = body.deposit;
-    if (body.status !== undefined) updateData.status = body.status;
-    
-    // Enrollment Specifics
     if (body.enrolled !== undefined) {
-      updateData.enrolled = Boolean(body.enrolled);
+      sets.push('enrolled = ?');
+      args.push(body.enrolled ? 1 : 0);
 
       if (body.enrolled) {
-        // Enrolling in a class
-        updateData.campusId = body.campusId || null;
-        updateData.roomId = body.roomId || null;
-        updateData.slotKey = body.slotKey || null;
-        updateData.courseCode = body.courseCode || null;
+        sets.push('campusId = ?', 'roomId = ?', 'slotKey = ?', 'courseCode = ?');
+        args.push(body.campusId || null, body.roomId || null, body.slotKey || null, body.courseCode || null);
       } else {
-        // Resetting enrollment back to general pool
-        updateData.campusId = null;
-        updateData.roomId = null;
-        updateData.slotKey = null;
-        updateData.courseCode = null;
+        sets.push('campusId = NULL', 'roomId = NULL', 'slotKey = NULL', 'courseCode = NULL');
       }
     }
 
-    await docRef.update(updateData);
+    if (sets.length === 0) return NextResponse.json({ success: false, error: 'No fields to update.' }, { status: 400 });
 
-    return NextResponse.json({
-      success: true,
-      message: 'Student updated successfully!',
-      student: { ...currentData, ...updateData }
-    });
-  } catch (error: any) {
-    console.error('Error updating student:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    args.push(id);
+    await db.execute({ sql: `UPDATE students SET ${sets.join(', ')} WHERE id = ?`, args });
+
+    return NextResponse.json({ success: true, message: 'Student updated.' });
+  } catch (err: any) {
+    console.error('[PUT /api/students/[id]]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
-// DELETE: Delete student from the database
+// DELETE: Remove a student
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await initDb();
   try {
     const { id } = await params;
-    const docRef = db.collection('students').doc(id);
-    const docSnap = await docRef.get();
-
-    if (!docSnap.exists) {
-      return NextResponse.json({ success: false, error: 'Student not found.' }, { status: 404 });
-    }
-
-    await docRef.delete();
-
-    return NextResponse.json({
-      success: true,
-      message: 'Student deleted successfully!'
-    });
-  } catch (error: any) {
-    console.error('Error deleting student:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    const res = await db.execute({ sql: 'DELETE FROM students WHERE id = ?', args: [id] });
+    if (res.rowsAffected === 0) return NextResponse.json({ success: false, error: 'Student not found.' }, { status: 404 });
+    return NextResponse.json({ success: true, message: 'Student deleted.' });
+  } catch (err: any) {
+    console.error('[DELETE /api/students/[id]]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

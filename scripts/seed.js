@@ -2,7 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const admin = require('firebase-admin');
 
-// Load environment variables manually
+// Load environment variables via Next.js native loader
+const { loadEnvConfig } = require('@next/env');
+loadEnvConfig(process.cwd());
+
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 const privateKey = process.env.FIREBASE_PRIVATE_KEY 

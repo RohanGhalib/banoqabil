@@ -1,160 +1,100 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, admin } from '@/lib/firebase-admin';
+import { db, initDb } from '@/lib/db';
 
-// GET: Query students with search, filters, and pagination
+// GET: paginated, filtered, searchable student list
 export async function GET(req: NextRequest) {
+  await initDb();
+  const { searchParams } = new URL(req.url);
+  const search   = searchParams.get('search')?.toLowerCase().trim() || '';
+  const filter   = searchParams.get('filter') || 'all';
+  const page     = Math.max(1, parseInt(searchParams.get('page')     || '1'));
+  const pageSize = Math.min(200, parseInt(searchParams.get('pageSize') || '50'));
+
   try {
-    const { searchParams } = new URL(req.url);
-    const search = searchParams.get('search')?.toLowerCase() || '';
-    const filter = searchParams.get('filter') || 'all'; // all, p1, p2, p3, p4, enrolled, male, female
-    const page = parseInt(searchParams.get('page') || '1');
-    const pageSize = parseInt(searchParams.get('pageSize') || '50');
+    // Build WHERE clauses
+    const conditions: string[] = [];
+    const args: any[]          = [];
 
-    // Fetch all students (dataset is ~1000, fetching all is very fast and allows complex filter/search)
-    const snapshot = await db.collection('students').orderBy('priority', 'asc').get();
-    let list = snapshot.docs.map(doc => doc.data());
+    if (filter === 'p1') { conditions.push('priority = 1'); }
+    else if (filter === 'p2') { conditions.push('priority = 2'); }
+    else if (filter === 'p3') { conditions.push('priority = 3'); }
+    else if (filter === 'p4') { conditions.push('priority = 4'); }
+    else if (filter === 'enrolled') { conditions.push('enrolled = 1'); }
+    else if (filter === 'male')   { conditions.push("gender = 'Male'"); }
+    else if (filter === 'female') { conditions.push("gender = 'Female'"); }
 
-    // Apply Search
     if (search) {
-      list = list.filter((s: any) => 
-        s.id.toLowerCase().includes(search) || 
-        s.name.toLowerCase().includes(search)
-      );
+      conditions.push('(lower(id) LIKE ? OR lower(name) LIKE ?)');
+      args.push(`%${search}%`, `%${search}%`);
     }
 
-    // Apply Filter
-    if (filter !== 'all') {
-      if (filter === 'p1') list = list.filter((s: any) => s.priority === 1);
-      else if (filter === 'p2') list = list.filter((s: any) => s.priority === 2);
-      else if (filter === 'p3') list = list.filter((s: any) => s.priority === 3);
-      else if (filter === 'p4') list = list.filter((s: any) => s.priority === 4);
-      else if (filter === 'enrolled') list = list.filter((s: any) => s.enrolled === true);
-      else if (filter === 'male') list = list.filter((s: any) => s.gender === 'Male');
-      else if (filter === 'female') list = list.filter((s: any) => s.gender === 'Female');
-    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const offset = (page - 1) * pageSize;
 
-    // Calculate dynamic stats
-    const totalCount = list.length;
-    const startIndex = (page - 1) * pageSize;
-    const paginatedList = list.slice(startIndex, startIndex + pageSize);
+    const [countRes, rowsRes] = await Promise.all([
+      db.execute({ sql: `SELECT COUNT(*) as cnt FROM students ${where}`, args }),
+      db.execute({ sql: `SELECT * FROM students ${where} ORDER BY priority ASC, id ASC LIMIT ? OFFSET ?`, args: [...args, pageSize, offset] }),
+    ]);
 
-    return NextResponse.json({
-      success: true,
-      students: paginatedList,
-      totalCount,
-      page,
-      pageSize,
-      totalPages: Math.ceil(totalCount / pageSize)
-    });
-  } catch (error: any) {
-    console.error('Error fetching students:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    const totalCount = Number((countRes.rows[0] as any).cnt);
+    const students = rowsRes.rows.map(r => ({
+      id:         r.id,
+      name:       r.name,
+      gender:     r.gender,
+      interviewed:r.interviewed,
+      deposit:    r.deposit,
+      batch1:     r.batch1,
+      priority:   Number(r.priority),
+      status:     r.status,
+      enrolled:   Boolean(Number(r.enrolled)),
+      campusId:   r.campusId,
+      roomId:     r.roomId,
+      slotKey:    r.slotKey,
+      courseCode: r.courseCode,
+    }));
+
+    return NextResponse.json({ success: true, students, totalCount, page, pageSize, totalPages: Math.ceil(totalCount / pageSize) });
+  } catch (err: any) {
+    console.error('[GET /api/students]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
-// POST: Add new student manually OR bulk-merge uploaded students
+// POST: add single student OR bulk array
 export async function POST(req: NextRequest) {
+  await initDb();
   try {
     const body = await req.json();
-    
-    // Check if bulk upload list
+
     if (Array.isArray(body)) {
-      console.log(`📥 Bulk upload request received for ${body.length} students...`);
-      const BATCH_SIZE = 500;
-      let added = 0;
-      let duplicates = 0;
-
-      // Fetch existing IDs to avoid duplicates
-      const snapshot = await db.collection('students').select('id').get();
-      const existingIds = new Set(snapshot.docs.map(doc => doc.id));
-
-      for (let i = 0; i < body.length; i += BATCH_SIZE) {
-        const batch = db.batch();
-        const chunk = body.slice(i, i + BATCH_SIZE);
-        let batchHasOperations = false;
-
-        chunk.forEach((s: any) => {
-          const sid = String(s.id).trim();
-          if (existingIds.has(sid)) {
-            duplicates++;
-            return;
-          }
-          
-          existingIds.add(sid);
-          const docRef = db.collection('students').doc(sid);
-          batch.set(docRef, {
-            id: sid,
-            name: s.name || 'Unknown',
-            gender: s.gender || 'Male',
-            interviewed: s.interviewed || 'No',
-            deposit: s.deposit || 'No',
-            batch1: s.batch1 || 'No',
-            priority: Number(s.priority) || 4,
-            status: s.status || 'Uploaded Registration',
-            enrolled: false,
-            campusId: null,
-            roomId: null,
-            slotKey: null,
-            courseCode: null,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          added++;
-          batchHasOperations = true;
+      // Bulk insert
+      let added = 0, duplicates = 0;
+      for (const s of body) {
+        const sid = String(s.id).trim();
+        const res = await db.execute({
+          sql: `INSERT OR IGNORE INTO students (id, name, gender, interviewed, deposit, batch1, priority, status, enrolled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          args: [sid, s.name || 'Unknown', s.gender || 'Male', s.interviewed || 'No', s.deposit || 'No', s.batch1 || 'No', Number(s.priority) || 4, s.status || ''],
         });
-
-        if (batchHasOperations) {
-          await batch.commit();
-        }
+        if (res.rowsAffected > 0) added++; else duplicates++;
       }
-
-      return NextResponse.json({
-        success: true,
-        message: `Successfully merged bulk data. Added ${added} students. Skipped ${duplicates} duplicates.`,
-        added,
-        duplicates
-      });
+      return NextResponse.json({ success: true, added, duplicates });
     }
 
-    // Manual single student entry
+    // Single student
     const { id, name, gender, priority, interviewed, deposit, status } = body;
-    if (!id || !name || !gender) {
-      return NextResponse.json({ success: false, error: 'Student ID, Name, and Gender are required fields.' }, { status: 400 });
-    }
+    if (!id || !name || !gender) return NextResponse.json({ success: false, error: 'ID, Name, and Gender are required.' }, { status: 400 });
 
-    const sid = String(id).trim();
-    const docRef = db.collection('students').doc(sid);
-    const docSnap = await docRef.get();
-
-    if (docSnap.exists) {
-      return NextResponse.json({ success: false, error: 'Student ID already exists in the database.' }, { status: 409 });
-    }
-
-    const newStudent = {
-      id: sid,
-      name: name.trim(),
-      gender,
-      priority: Number(priority) || 4,
-      interviewed: interviewed || 'No',
-      deposit: deposit || 'No',
-      batch1: 'No',
-      status: status.trim() || 'Manually added',
-      enrolled: false,
-      campusId: null,
-      roomId: null,
-      slotKey: null,
-      courseCode: null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    await docRef.set(newStudent);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Student added successfully!',
-      student: newStudent
+    const res = await db.execute({
+      sql: `INSERT OR IGNORE INTO students (id, name, gender, interviewed, deposit, batch1, priority, status, enrolled)
+            VALUES (?, ?, ?, ?, ?, 'No', ?, ?, 0)`,
+      args: [String(id).trim(), name.trim(), gender, interviewed || 'No', deposit || 'No', Number(priority) || 4, status?.trim() || 'Manually added'],
     });
-  } catch (error: any) {
-    console.error('Error adding student:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+
+    if (res.rowsAffected === 0) return NextResponse.json({ success: false, error: 'Student ID already exists.' }, { status: 409 });
+    return NextResponse.json({ success: true, message: 'Student added.' });
+  } catch (err: any) {
+    console.error('[POST /api/students]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

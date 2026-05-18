@@ -7,9 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed-sqlite.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.3",
     "clsx": "^2.1.1",
     "firebase": "^12.13.0",
     "firebase-admin": "^13.10.0",

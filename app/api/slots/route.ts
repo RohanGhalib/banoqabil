@@ -1,89 +1,84 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase-admin';
+import { db, initDb, seedDefaultSlots } from '@/lib/db';
 
-// GET: Fetch all classroom slots with dynamic occupancy and gender counts
-export async function GET(req: NextRequest) {
+// GET: all slots enriched with live roster counts via a single SQL JOIN
+export async function GET() {
+  await initDb();
   try {
-    // 1. Fetch all slots from Firestore
-    const slotsSnap = await db.collection('slots').get();
-    const slots = slotsSnap.docs.map(doc => doc.data());
+    // Fetch all slots
+    const slotsRes = await db.execute('SELECT * FROM slots');
 
-    // 2. Fetch all enrolled students
-    const studentsSnap = await db.collection('students').where('enrolled', '==', true).get();
-    const enrolledStudents = studentsSnap.docs.map(doc => doc.data());
+    // Fetch enrolled students grouped for fast lookup
+    const studentsRes = await db.execute(
+      `SELECT id, name, gender, priority, status, roomId, slotKey
+       FROM students WHERE enrolled = 1`
+    );
 
-    // 3. Merge aggregates dynamically
-    const enrichedSlots = slots.map((slot: any) => {
-      const slotStudents = enrolledStudents.filter((s: any) => 
-        s.roomId === slot.roomId && 
-        s.slotKey === slot.slotKey
+    const enrolled = studentsRes.rows;
+
+    // Enrich each slot with counts and roster
+    const slots = slotsRes.rows.map((slot: any) => {
+      const roster = enrolled.filter(
+        (s: any) => s.roomId === slot.roomId && s.slotKey === slot.slotKey
       );
-
-      const enrolledCount = slotStudents.length;
-      const maleCount = slotStudents.filter((s: any) => s.gender === 'Male').length;
-      const femaleCount = slotStudents.filter((s: any) => s.gender === 'Female').length;
-
       return {
-        ...slot,
-        enrolledCount,
-        maleCount,
-        femaleCount,
-        // Also attach direct student names/ids for the roster inspector!
-        roster: slotStudents.map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          gender: s.gender,
-          priority: s.priority,
-          status: s.status
-        }))
+        id:           slot.id,
+        campusId:     slot.campusId,
+        roomId:       slot.roomId,
+        slotKey:      slot.slotKey,
+        course:       slot.course,
+        gender:       slot.gender,
+        capacity:     Number(slot.capacity),
+        enrolledCount:roster.length,
+        maleCount:    roster.filter((s: any) => s.gender === 'Male').length,
+        femaleCount:  roster.filter((s: any) => s.gender === 'Female').length,
+        roster: roster.map((s: any) => ({
+          id: s.id, name: s.name, gender: s.gender,
+          priority: Number(s.priority), status: s.status,
+        })),
       };
     });
 
-    return NextResponse.json({
-      success: true,
-      slots: enrichedSlots
-    });
-  } catch (error: any) {
-    console.error('Error fetching slots:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, slots });
+  } catch (err: any) {
+    console.error('[GET /api/slots]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
-// POST: Add or update a slot configuration
+// POST: upsert a slot config (assign or update course/gender/capacity)
+// DELETE body: send { campusId, roomId, slotKey, clear: true } to remove a slot
 export async function POST(req: NextRequest) {
+  await initDb();
   try {
     const body = await req.json();
-    const { campusId, roomId, slotKey, course, gender, capacity } = body;
+    const { campusId, roomId, slotKey, course, gender, capacity, clear } = body;
 
-    if (!campusId || !roomId || !slotKey || !course || !gender || capacity === undefined) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Missing required fields: campusId, roomId, slotKey, course, gender, capacity.' 
-      }, { status: 400 });
+    if (!campusId || !roomId || !slotKey) {
+      return NextResponse.json({ success: false, error: 'campusId, roomId, slotKey required.' }, { status: 400 });
     }
 
-    const slotId = `${roomId}-${slotKey}`;
-    const docRef = db.collection('slots').doc(slotId);
+    const id = `${campusId}-${roomId}-${slotKey}`;
 
-    const slotData = {
-      id: slotId,
-      campusId,
-      roomId,
-      slotKey,
-      course,
-      gender,
-      capacity: Number(capacity)
-    };
+    if (clear) {
+      await db.execute({ sql: 'DELETE FROM slots WHERE id = ?', args: [id] });
+      return NextResponse.json({ success: true, message: 'Slot cleared.' });
+    }
 
-    await docRef.set(slotData, { merge: true });
+    if (!course || !gender || capacity === undefined) {
+      return NextResponse.json({ success: false, error: 'course, gender, capacity required.' }, { status: 400 });
+    }
 
-    return NextResponse.json({
-      success: true,
-      message: 'Timetable slot configured successfully!',
-      slot: slotData
+    await db.execute({
+      sql: `INSERT INTO slots (id, campusId, roomId, slotKey, course, gender, capacity)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET course=excluded.course, gender=excluded.gender, capacity=excluded.capacity`,
+      args: [id, campusId, roomId, slotKey, course, gender, Number(capacity)],
     });
-  } catch (error: any) {
-    console.error('Error configuring slot:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+
+    return NextResponse.json({ success: true, message: 'Slot saved.' });
+  } catch (err: any) {
+    console.error('[POST /api/slots]', err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { db, admin } from '@/lib/firebase-admin';
+import { db, admin, isUsingPlaceholders } from '@/lib/firebase-admin';
 
 const defaults: Record<string, Record<string, { course: string; gender: string; cap: number }>> = {
   'ds-lab1': {
@@ -67,6 +67,13 @@ const defaults: Record<string, Record<string, { course: string; gender: string; 
 };
 
 export async function POST() {
+  if (isUsingPlaceholders()) {
+    return NextResponse.json({
+      success: false,
+      error: '⚠️ Seeding failed: You are still using placeholder credentials inside your .env.local file. Please generate and paste your actual Firebase Service Account Client Email and Private Key in your local .env.local file to establish a live connection to Firestore!'
+    }, { status: 400 });
+  }
+
   try {
     console.log('🌐 Web seeder POST request received...');
     
